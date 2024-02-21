@@ -183,6 +183,7 @@ static int xmp_trim(u_int64_t from, u_int32_t len, void *userdata) {
 
 static struct argp_option options[] = {
     {"verbose", 'v', 0, 0, "Produce verbose output", 0},
+    {"init", 'i', 0, 0, "Initialize the RAID", 0},
     {0},
 };
 
@@ -193,6 +194,7 @@ struct arguments
     char *raid_device;
     int verbose;
     int num_devices;
+    bool need_init;
 };
 
 /* Parse a single option. */
@@ -206,6 +208,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
 
     case 'v':
         arguments->verbose = 1;
+        break;
+    case 'i':
+        arguments->need_init = true;
         break;
 
     case ARGP_KEY_ARG:
@@ -314,41 +319,54 @@ static struct argp argp = {
            "If you prepend '+' to a DEVICE, you are re-adding it as a replacement to the RAID, and we will rebuild the array. "
            "This is synchronous; the rebuild will have to finish before the RAID is started. "};
 
+void printProgressBar(uint64_t current, uint64_t total)
+{
+    const int barWidth = 50;
+    float progress = (float)current / total;
+    int pos = barWidth * progress;
+
+    printf("[");
+    for (int i = 0; i < barWidth; ++i)
+    {
+        if (i < pos)
+            printf("=");
+        else if (i == pos)
+            printf(">");
+        else
+            printf(" ");
+    }
+    printf("] %.2f%%\r", progress * 100);
+    fflush(stdout);
+}
+
 static int do_raid_rebuild()
 {
-    // target drive index is: rebuild_dev
-    int source_dev = (rebuild_dev + 1) % 2; // the other one
+    // rebuild the rebuild_dev
+    // compute the original data from the other drives based on the parity
+    // write the data to the rebuild_dev
     char buf[block_size];
-    lseek(dev_fd[source_dev], 0, SEEK_SET);
-    lseek(dev_fd[rebuild_dev], 0, SEEK_SET);
+    char readBuf[block_size];
+    fprintf(stdout, "Rebuilding...\n");
+    memset(buf, 0, block_size);
 
-    // simple block copy
-    for (uint64_t cursor = 0; cursor < raid_device_size; cursor += block_size)
+    for (uint64_t cursor = 0; cursor < raid_device_size / block_size; cursor += block_size)
     {
-        int r;
-        r = read(dev_fd[source_dev], buf, block_size);
-        if (r < 0)
+        for (int i = 0; i < dev_fd_size; i++)
         {
-            perror("rebuild_read");
-            return -1;
+            if (i != rebuild_dev)
+            {
+                pread(dev_fd[i], readBuf, block_size, cursor);
+                for (int j = 0; j < block_size; j++)
+                {
+                    buf[j] = buf[j] ^ readBuf[j];
+                }
+            }
         }
-        else if (r != block_size)
-        {
-            fprintf(stderr, "rebuild_read: short read (%d bytes), offset=%zu\n", r, cursor);
-            return 1;
-        }
-        r = write(dev_fd[rebuild_dev], buf, block_size);
-        if (r < 0)
-        {
-            perror("rebuild_write");
-            return -1;
-        }
-        else if (r != block_size)
-        {
-            fprintf(stderr, "rebuild_write: short write (%d bytes), offset=%zu\n", r, cursor);
-            return 1;
-        }
+        pwrite(dev_fd[rebuild_dev], buf, block_size, cursor);
+        printProgressBar(cursor + block_size, raid_device_size / block_size);
     }
+    printf("\n"); // Print a new line after the progress bar is complete
+
     return 0;
 }
 
@@ -443,6 +461,41 @@ int main(int argc, char *argv[])
         }
     }
     fprintf(stderr, "RAID device resulting size: %ld.\n", bop.size);
+    if (arguments.need_init)
+    {
+        if (degraded)
+        {
+            fprintf(stderr, "ERROR: Can't initialize a RAID with a missing device. Aborting.\n");
+            exit(1);
+        }
+        fprintf(stderr, "Initializing RAID parity...\n");
+        // write all files to zero
+        char zero[block_size];
+        memset(zero, 0, block_size);
 
+        // Function to print the progress bar
+
+        for (uint64_t cursor = 0; cursor < raid_device_size / block_size; cursor += block_size)
+        {
+            for (int i = 0; i < dev_fd_size; i++)
+            {
+                int r = pwrite(dev_fd[i], zero, block_size, cursor);
+                if (r < 0)
+                {
+                    perror("init_write");
+                    return -1;
+                }
+                else if (r != block_size)
+                {
+                    fprintf(stderr, "init_write: short write (%d bytes), offset=%zu\n", r, cursor);
+                    return 1;
+                }
+            }
+
+            // Print the progress bar
+            printProgressBar(cursor + block_size, raid_device_size / block_size);
+        }
+        printf("\n"); // Print a new line after the progress bar is complete
+    }
     return buse_main(arguments.raid_device, &bop, NULL);
 }

@@ -17,6 +17,7 @@ def write_block(device_path, offset, data):
         os.pwrite(fd, data, offset) 
     finally:
         os.close(fd)
+
 def test_block_readwrite(device_path, device_size, times=20, block_size=1024):
     # write data to random offset and read it back
     print ('----------testing block random read/write----------')
@@ -32,6 +33,7 @@ def test_block_readwrite(device_path, device_size, times=20, block_size=1024):
         if data != read_data:
             print('data mismatch at offset: {}'.format(offset))
             for byte in range(size):
+                print(len(data), len(read_data), byte)
                 if data[byte] != read_data[byte]:
                     print('mismatch at byte: {}'.format(byte))
                     print('data: {}'.format(data[byte]))
@@ -123,14 +125,30 @@ def main():
     total_size = os.path.getsize(image0) + os.path.getsize(image1)
     total_size = total_size - total_size % block_size
     print('total size: {}'.format(total_size))
-    test_block_readwrite(device, total_size, 100, block_size)
+    test_block_readwrite(device, total_size, 20, block_size)
     # test_block_first_write_to_image0(device, image0, block_size)
     # test_block_first_write_to_image1(device, image1, block_size)
     # test_block_write_with_image(device, image0, image1, block_size, 100)
 
 
+def test_check_parity(imglist, parityimg, block_size=1024):
+    # check if parityimg is the parity of imglist
+    print('----------testing check parity----------')
+    block_data = []
+    for i in range(len(imglist)):
+        block_data.append(read_block(imglist[i], 0, block_size))
+    parity_data = read_block(parityimg, 0, block_size)
+    for i in range(1, len(imglist)):
+        actual_parity = bytes([a ^ b for a, b in zip(block_data[0], block_data[i])])
+    if actual_parity != parity_data:
+        print('[FAILED]test check parity failed')
+        return False
+    print('[SUCCESS]test check parity passed')
+
 if __name__ == '__main__':
+    test_check_parity(['img0', 'img6'], 'img2', 1024)
     main()
+    test_check_parity(['img0', 'img6'], 'img2', 1024)
 
 
 

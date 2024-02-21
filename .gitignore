@@ -1,0 +1,6 @@
+*.o
+raid*
+img*
+loopback
+busexmp
+libbuse.a

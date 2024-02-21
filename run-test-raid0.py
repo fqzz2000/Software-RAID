@@ -17,6 +17,11 @@ def write_block(device_path, offset, data):
         os.pwrite(fd, data, offset) 
     finally:
         os.close(fd)
+
+
+
+
+
 def test_block_readwrite(device_path, device_size, times=20, block_size=1024):
     # write data to random offset and read it back
     print ('----------testing block random read/write----------')
@@ -130,6 +135,7 @@ def main():
 
 
 if __name__ == '__main__':
+
     main()
 
 
