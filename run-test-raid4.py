@@ -33,12 +33,11 @@ def test_block_readwrite(device_path, device_size, times=20, block_size=1024):
         if data != read_data:
             print('data mismatch at offset: {}'.format(offset))
             for byte in range(size):
-                print(len(data), len(read_data), byte)
+                # print(len(data), len(read_data), byte)
                 if data[byte] != read_data[byte]:
                     print('mismatch at byte: {}'.format(byte))
                     print('data: {}'.format(data[byte]))
                     print('read_data: {}'.format(read_data[byte]))
-                    print("")
                     break
             print('[FAILED]test block random read/write failed')
             return False

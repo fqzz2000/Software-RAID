@@ -58,22 +58,39 @@ static int xmp_read(void *buf, u_int32_t len, u_int64_t offset, void *userdata)
         return -EIO;
     }
     long bytesRead = 0;
-    if (degraded)
+
+    for (long i = started; i < ended; i++)
     {
-        // read from surviving drive
-        ;
-    }
-    else
-    {
-        for (long i = started; i < ended; i++)
+        int driveToRead = i % (dev_fd_size - 1);
+        int blockToRead = i / (dev_fd_size - 1) * block_size;
+        long rd;
+        long bytesToRead = len - bytesRead > block_size ? block_size : len - bytesRead;
+        if (degraded && driveToRead == fail_dev)
         {
-            int driveToRead = i % (dev_fd_size - 1);
-            int blockToRead = i / (dev_fd_size - 1) * block_size;
-            long bytesToRead = len - bytesRead > block_size ? block_size : len - bytesRead;
-            long rd = pread(dev_fd[driveToRead], (char *)buf + bytesRead, bytesToRead, blockToRead);
-            bytesRead += rd;
+            char readBuf[bytesToRead];
+            memset(readBuf, 0, bytesToRead);
+            // read from surviving drives
+            memset((char *)buf + bytesRead, 0, bytesToRead);
+            for (int j = 0; j < dev_fd_size; j++)
+            {
+                if (j != fail_dev)
+                {
+                    pread(dev_fd[j], readBuf, bytesToRead, blockToRead);
+                    for (int k = 0; k < bytesToRead; k++)
+                    {
+                        ((char *)buf)[k + bytesRead] = ((char *)buf)[k + bytesRead] ^ readBuf[k];
+                    }
+                }
+            }
+            rd = bytesToRead;
         }
+        else
+        {
+            rd = pread(dev_fd[driveToRead], (char *)buf + bytesRead, bytesToRead, blockToRead);
+        }
+        bytesRead += rd;
     }
+
     return 0;
 }
 
@@ -91,57 +108,60 @@ static int xmp_write(const void *buf, u_int32_t len, u_int64_t offset, void *use
     if (verbose)
         fprintf(stderr, "W - %lu, %u\n", offset, len);
 
-    if (degraded)
+    for (long i = started; i < ended; i++)
     {
-        // write to surviving drive
-        ;
-    }
-    else
-    {
-        for (long i = started; i < ended; i++)
+        int driveToWrite = i % (dev_fd_size - 1);
+        int blockToWrite = i / (dev_fd_size - 1) * block_size;
+        long bytesToWrite = len - bytesWritten > block_size ? block_size : len - bytesWritten;
+        if (degraded && driveToWrite == fail_dev)
         {
-            int driveToWrite = i % (dev_fd_size - 1);
-            int blockToWrite = i / (dev_fd_size - 1) * block_size;
-            long bytesToWrite = len - bytesWritten > block_size ? block_size : len - bytesWritten;
+            // only need to update the parity
+            char parityBlock[bytesToWrite];
+            memset(parityBlock, 0, bytesToWrite);
+            for (int j = 0; j < dev_fd_size; j++)
+            {
+                if (j != fail_dev && j != parity_dev)
+                {
+                    char readBuf[bytesToWrite];
+                    pread(dev_fd[j], readBuf, bytesToWrite, blockToWrite);
+                    for (int k = 0; k < bytesToWrite; k++)
+                    {
+                        parityBlock[k] = parityBlock[k] ^ readBuf[k];
+                    }
+                }
+            }
+            // xor the newvalue with the parity
+            for (int j = 0; j < bytesToWrite; j++)
+            {
+                parityBlock[j] = parityBlock[j] ^ ((char *)buf)[bytesWritten + j];
+            }
+            // write new parity
+            long parityWr = pwrite(dev_fd[parity_dev], parityBlock, bytesToWrite, blockToWrite);
+            bytesWritten += bytesToWrite;
+        }
+        else
+        {
             // update parity first
             // get old value of the block to be updated
             char oldBlock[block_size];
             long oldbytes = pread(dev_fd[driveToWrite], oldBlock, block_size, blockToWrite);
-            if (oldbytes < 0)
-            {
-                perror("parity_read");
-                return -EIO;
-            }
-            else if (oldbytes != block_size)
-            {
-                fprintf(stderr, "parity_read: short read (%ld bytes), offset=%ld\n", oldbytes, blockToWrite);
-                return -EIO;
-            }
 
             long wr = pwrite(dev_fd[driveToWrite], (char *)buf + bytesWritten, bytesToWrite, blockToWrite);
-            bytesWritten += wr;
+
             // update parity
             // xor old value with new value
             char parityBlock[block_size];
             long oldParitybytes = pread(dev_fd[parity_dev], parityBlock, block_size, blockToWrite);
-            for (int i = 0; i < block_size; i++)
+            for (int i = 0; i < bytesToWrite; i++)
             {
-                parityBlock[i] = parityBlock[i] ^ oldBlock[i] ^ ((char *)buf)[i];
+                parityBlock[i] = parityBlock[i] ^ oldBlock[i] ^ ((char *)buf)[i + bytesWritten];
             }
             // write new parity
             long parityWr = pwrite(dev_fd[parity_dev], parityBlock, block_size, blockToWrite);
-            if (parityWr < 0)
-            {
-                perror("parity_write");
-                return -EIO;
-            }
-            else if (parityWr != block_size)
-            {
-                fprintf(stderr, "parity_write: short write (%ld bytes), offset=%ld\n", parityWr, blockToWrite);
-                return -EIO;
-            }
+            bytesWritten += wr;
         }
     }
+
     return 0;
 }
 
@@ -461,6 +481,10 @@ int main(int argc, char *argv[])
         }
     }
     fprintf(stderr, "RAID device resulting size: %ld.\n", bop.size);
+    if (degraded)
+    {
+        fprintf(stderr, "RAID is running in degraded mode.\n");
+    }
     if (arguments.need_init)
     {
         if (degraded)
