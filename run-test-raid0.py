@@ -128,7 +128,7 @@ def main():
     total_size = os.path.getsize(image0) + os.path.getsize(image1)
     total_size = total_size - total_size % block_size
     print('total size: {}'.format(total_size))
-    test_block_readwrite(device, total_size, 100, block_size)
+    test_block_readwrite(device, total_size, 200, block_size)
     test_block_first_write_to_image0(device, image0, block_size)
     test_block_first_write_to_image1(device, image1, block_size)
     test_block_write_with_image(device, image0, image1, block_size, 100)
