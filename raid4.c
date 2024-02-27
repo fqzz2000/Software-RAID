@@ -144,20 +144,26 @@ static int xmp_write(const void *buf, u_int32_t len, u_int64_t offset, void *use
             // update parity first
             // get old value of the block to be updated
             char oldBlock[block_size];
-            long oldbytes = pread(dev_fd[driveToWrite], oldBlock, block_size, blockToWrite);
+            if (!degraded || fail_dev != parity_dev)
+            {
+                pread(dev_fd[driveToWrite], oldBlock, block_size, blockToWrite);
+            }
 
             long wr = pwrite(dev_fd[driveToWrite], (char *)buf + bytesWritten, bytesToWrite, blockToWrite);
 
             // update parity
             // xor old value with new value
-            char parityBlock[block_size];
-            long oldParitybytes = pread(dev_fd[parity_dev], parityBlock, block_size, blockToWrite);
-            for (int i = 0; i < bytesToWrite; i++)
+            if (!degraded || fail_dev != parity_dev)
             {
-                parityBlock[i] = parityBlock[i] ^ oldBlock[i] ^ ((char *)buf)[i + bytesWritten];
+                char parityBlock[block_size];
+                pread(dev_fd[parity_dev], parityBlock, block_size, blockToWrite);
+                for (int i = 0; i < bytesToWrite; i++)
+                {
+                    parityBlock[i] = parityBlock[i] ^ oldBlock[i] ^ ((char *)buf)[i + bytesWritten];
+                }
+                // write new parity
+                long parityWr = pwrite(dev_fd[parity_dev], parityBlock, block_size, blockToWrite);
             }
-            // write new parity
-            long parityWr = pwrite(dev_fd[parity_dev], parityBlock, block_size, blockToWrite);
             bytesWritten += wr;
         }
     }
